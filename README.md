@@ -1,10 +1,13 @@
 # SpykesML
-## Machine Learning methods implemented as encoding models
-This repository accompanies "Modern Machine Learning Far Outperforms GLMs at Predicting Spikes"[https://doi.org/10.1101/111450]. Here, you can find a Python class `MLencoding`
-that you can use for quickly making encoding models.
+## How to build encoding models with machine learning methods
+This repository accompanies "Modern Machine Learning Far Outperforms GLMs at Predicting Spikes"[https://doi.org/10.1101/111450].
 
-For a tutorial on how to use `MLencoding`, see the notebooks folder. There
-you can also find a "standalone notebook" that demos how to use some ML methods
+Here you can find a Python class `MLencoding`
+that you can use for quickly making encoding models.
+For a tutorial on how to use `MLencoding`, see the notebooks folder.
+
+The notebooks folder also has a
+"standalone notebook" that demos how to use some ML methods
 without our fancy class.
 
 Currently implemented methods:
@@ -13,6 +16,10 @@ Currently implemented methods:
 * Random forest
 * xgboost
 * LSTM
+With
+* k-fold cross-validation
+* spike and covariate history options
+and more!
 
 
 #### Installation
@@ -23,7 +30,7 @@ cd spykesML
 python setup.py install
 ```
 
-#### Quick how-to:
+### Quick how-to:
 Build the encoder:
 ```python
 model = MLencoding(tunemodel = 'xgboost')
@@ -47,7 +54,7 @@ xgb_history = MLencoding(tunemodel = 'xgboost',
                          max_time = 250 ) #in ms
 xgb_history.fit_cv(X,y, verbose = 2, continuous_folds = True)
 ```
-See the tutorial for how to define parameters, build new encoding models, and more!
+See the tutorial for how to define parameters and build new encoding models.
 
 ### Dependencies
 #### Basics
