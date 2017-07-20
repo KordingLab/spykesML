@@ -35,5 +35,5 @@ if __name__ == "__main__":
               'Operating System :: MacOS',
           ],
           platforms='any',
-          packages=['mlencoding'],
+          packages=['MLencoding'],
           )
