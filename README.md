@@ -1,10 +1,53 @@
 # SpykesML
 ## Machine Learning methods implemented as encoding models
-This repository accompanies "Modern Machine Learning Far Outperforms GLMs at Predicting Spikes"[https://doi.org/10.1101/111450]. We implement various Machine Learning algorithms for spike prediction and offer this as a Python template.
+This repository accompanies "Modern Machine Learning Far Outperforms GLMs at Predicting Spikes"[https://doi.org/10.1101/111450]. Here, you can find a Python class `MLencoding`
+that you can use for quickly making encoding models.
 
-The meat of this is in a Jupyter notebook. To run yourself, simply clone this repository and open the notebook in Jupyter.
+For a tutorial on how to use `MLencoding`, see the notebooks folder. There
+you can also find a "standalone notebook" that demos how to use some ML methods
+without our fancy class.
 
-For ML algorithms applied to decoding, see our partner repository Neural_Decoding, also on the main KordingLab GitHub page.
+Currently implemented methods:
+* GLM
+* 2-layer feedforward net
+* Random forest
+* xgboost
+* LSTM
+
+
+#### Installation
+In a terminal:
+```
+git clone https://github.com/KordingLab/spykesML
+cd spykesML
+python setup.py install
+```
+
+#### Quick how-to:
+Build the encoder:
+```python
+model = MLencoding(tunemodel = 'xgboost')
+print(model.params)
+```
+Fit and predict to some data:
+```python
+model.fit(X_train, y_train)
+Y_hat = model.predict(X_test)
+```
+Perform k-fold cross-validation:
+```python
+model.fit_cv(X,y)
+```
+Use spike and covariate history as inputs:
+```python
+xgb_history = MLencoding(tunemodel = 'xgboost',
+                         cov_history = True, spike_history=True,
+                         window = 50, #this dataset has 50ms time bins
+                         n_filters = 4,
+                         max_time = 250 ) #in ms
+xgb_history.fit_cv(X,y, verbose = 2, continuous_folds = True)
+```
+See the tutorial for how to define parameters, build new encoding models, and more!
 
 ### Dependencies
 #### Basics
