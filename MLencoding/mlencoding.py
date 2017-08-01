@@ -264,6 +264,9 @@ class MLencoding(object):
 
             self.model = model
 
+        else: #using predefined model
+            self.model.fit(X,Y)
+
     def predict(self, X, get_history_terms = True):
         """
         Compute the firing rates for the neuron
