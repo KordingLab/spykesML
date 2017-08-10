@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 
 #GLM
 from pyglmnet import GLM
@@ -6,8 +7,10 @@ from pyglmnet import GLM
 #NN
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Lambda
-from keras.regularizers import l1_l2
-from keras.optimizers import Nadam
+from keras.regularizers import l2
+from keras.optimizers import Nadam, adam
+from keras.layers.normalization import BatchNormalization
+
 
 #XGB
 import xgboost as xgb
@@ -135,11 +138,13 @@ class MLencoding(object):
               'reg_lambda':np.logspace(np.log(0.05), np.log(0.0001), 10, base=np.exp(1)),
               'learning_rate':2, 'max_iter':10000, 'eta':2.0}
         elif tunemodel == 'feedforward_nn':
-            self.params = {'dropout': 0.5,
-              'l1': 0.0,
-              'l2': 0.0,
-              'n1': 1980, #number of layers in 1st hidden layer
-              'n2': 18}
+            self.params = {'dropout': 0.05,
+              'l2': 1.6e-08,
+              'lr': 0.001,
+              'n1': 76, #number of layers in 1st hidden layer
+              'n2': 16,
+              'decay': 0.009, 'clipnorm' : 1.3, 'b1' : 0.2, 'b2' : 0.02}
+
         elif tunemodel == 'xgboost':
             self.params = {'objective': "count:poisson", #for poisson output
                 'eval_metric': "logloss", #loglikelihood loss
@@ -173,6 +178,7 @@ class MLencoding(object):
             # if method predefined and not a string
             self.tunemodel.set_params(**params)
 
+        self.default_params = False
 
     def get_params(self):
         """Prints the current parameters of the model."""
@@ -194,6 +200,9 @@ class MLencoding(object):
 
 
         """
+        if self.default_params:
+            warnings.warn('\n  Using default hyperparameters. Consider optimizing on'+
+                ' a held-out dataset using, e.g. hyperopt or random search')
 
         # make the covariate matrix. Include spike or covariate history?
         # The different methods here are to satisfy the needs of recurrent keras
@@ -218,15 +227,19 @@ class MLencoding(object):
 
             params = self.params
             model = Sequential()
-            model.add(Dense(params['n1'], input_dim=np.shape(X)[1], init='glorot_normal',
-                        activation='relu', W_regularizer=l1_l2(params['l1'],params['l2'])))
+            model.add(Dense(params['n1'], input_dim=np.shape(X)[1], kernel_initializer='glorot_normal',
+                        activation='relu', kernel_regularizer=l2(params['l2'])))
             model.add(Dropout(params['dropout']))
-            model.add(Dense(params['n2'], init='glorot_normal'
-                            , activation='relu',W_regularizer=l1_l2(params['l1'],params['l2'])))
+            model.add(BatchNormalization())
+            model.add(Dense(params['n2'], kernel_initializer='glorot_normal'
+                            , activation='relu',kernel_regularizer=l2(params['l2'])))
+            model.add(BatchNormalization())
             model.add(Dense(1,activation='softplus'))
-            optim = Nadam()
+            optim = adam(lr=params['lr'], clipnorm=params['clipnorm'],
+                            decay = params['decay'],
+                            beta_1=1-params['b1'], beta_2=1-params['b2'])
             model.compile(loss='poisson', optimizer=optim,)
-            hist = model.fit(X, Y, batch_size = 32, nb_epoch=5, verbose=self.verbose)
+            hist = model.fit(X, Y, batch_size = 128, epochs=30, verbose=self.verbose)
 
             self.model = model
 
@@ -259,7 +272,7 @@ class MLencoding(object):
 
             #Fit model (and set fitting parameters)
             model.compile(loss='poisson',optimizer='rmsprop',metrics=['accuracy'])
-            model.fit(X,Y,nb_epoch=int(params['epochs']),
+            model.fit(X,Y,epochs=int(params['epochs']),
                         batch_size = int(params['batch_size']),verbose=self.verbose) #Fit the model
 
             self.model = model
