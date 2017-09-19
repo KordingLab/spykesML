@@ -11,6 +11,8 @@ from keras.regularizers import l2
 from keras.optimizers import Nadam, adam
 from keras.layers.normalization import BatchNormalization
 
+#CV
+from sklearn.model_selection import KFold
 
 #XGB
 import xgboost as xgb
@@ -48,6 +50,13 @@ class MLencoding(object):
                 use nevery >= max_time/time_window to prevent leakage
 
 
+    For ensemble fitting:
+        Fit an stacked ensemble by setting is_ensemble = True. This requires that you
+        supply a list of 1st-order methods.
+    is_ensemble = True/False. whether to train tunemodel on the results of 1st-order models
+    first_order_models = list of MLenconding instances. Needed if is_ensemble = True
+
+
 
     Callable methods
     ----------------
@@ -70,7 +79,7 @@ class MLencoding(object):
 
     def __init__(self, tunemodel='glm', spike_history = False, cov_history = False,
                  random_state=1, window = 0, n_filters = 0, max_time = 0, n_every = 1,
-                 verbose=0):
+                 verbose=0, is_ensemble = False, first_order_models = None):
         """
         Initialize the object
         """
@@ -84,6 +93,8 @@ class MLencoding(object):
         self.n_filters = n_filters
         self.max_time = max_time
         self.n_every = n_every
+        self.is_ensemble = is_ensemble
+        self.first_order_models = first_order_models
 
         np.random.seed(random_state)
 
@@ -112,9 +123,10 @@ class MLencoding(object):
                     ' greater than 0 if spike or covariate history are used.')
                 raise
             try:
-                assert int(max_time/window) > n_filters
+                assert int(max_time/window) >= n_filters
             except AssertionError:
-                print('Need more sample points than filters. ')
+                print('There are more time filters than there are time points '+
+                        'per example. Need max_time//window >= n_filters')
                 raise
 
         if tunemodel == 'lstm':
@@ -123,6 +135,15 @@ class MLencoding(object):
             except AssertionError:
                 print('Recurrent models need history!\n' +
                     'Set spike_history=True and cov_history=True')
+                raise
+
+        if is_ensemble == True:
+            try:
+                for model in first_order_models:
+                    assert isinstance(model, MLencoding)
+            except:
+                print('first_order_models needs to be a list of MLencoding objects '+
+                        'if is_ensemble == True.')
                 raise
 
     def set_default_params(self):
@@ -313,6 +334,8 @@ class MLencoding(object):
         Y = self.model.predict(X)
 
         return Y
+
+
 
     def raised_cosine_filter(self,n_bins, k, nBases = 15):
         """Return a cosine bump, kth of nBases, such that the bases tile
@@ -571,10 +594,6 @@ class MLencoding(object):
 
         Input
         =====
-
-        Returns (Y_hat, pR2_cv); a vector of predictions Y_hat with the
-        same dimensions as Y, and a list of pR2 scores on each fold pR2_cv.
-
         X  = input data
         Y = spiking data
         n_cv = number of cross-validations folds
@@ -582,6 +601,14 @@ class MLencoding(object):
                         split them in contiguous chunks. The latter is advantageous
                         when using spike history as a covariate to prevent
                         leakage across folds
+
+        Returns
+        (Y_hat, pR2_cv); a vector of predictions Y_hat with the
+        same dimensions as Y, and a list of pR2 scores on each fold pR2_cv.
+
+
+
+
 
         """
         if not continuous_folds:
@@ -597,6 +624,11 @@ class MLencoding(object):
 
         if self.tunemodel=='lstm':
             assert continuous_folds
+
+        if self.is_ensemble == True:
+            print('Running nested CV scheme on first order models.')
+            return self.ensemble_cv(X, Y, continuous_folds = continuous_folds,
+                                        n_cv_outer=n_cv, n_cv_inner=n_cv)
 
         if np.ndim(X)==1:
             X = np.transpose(np.atleast_2d(X))
@@ -644,8 +676,6 @@ class MLencoding(object):
                     print( 'pR2: ', pR2)
         else:
 
-            from sklearn.model_selection import KFold
-
             cv_kf = KFold(n_splits=n_cv, shuffle=True, random_state=42)
             skf  = cv_kf.split(X)
 
@@ -677,6 +707,202 @@ class MLencoding(object):
                                                  np.std(pR2_cv)/np.sqrt(n_cv)))
 
         return Y_hat, pR2_cv
+
+    # These two methods implement the above scheme. We don't want to be forced to run the ensemble
+    # at the same time as we train the other methods on each fold, so we'll save the 1st-stage predictions for later
+    # and use separate methods for training a 1st-stage method and the 2nd-stage method. This will make more sense
+    # when we implement this.
+
+    # Basically, the first method is used to train a 1st-stage method, and the 2nd to train a 2nd-stage method.
+
+
+    def fit_nested_cv(self,X, Y, n_cv_outer=5,n_cv_inner=5, verbose=1, continuous_folds=False):
+        """Outputs a list of n_cv_outer prediction vectors Yt_hats, each with length size(Y).
+
+        n_cv_outer is p, in the notation above, and n_cv_inner is k.
+
+        Each prediction vector will be used to train and test a single fold of the ensemble
+        in the method `ensemble_cv`. """
+
+
+
+        if np.ndim(X)==1:
+            X = np.transpose(np.atleast_2d(X))
+
+        if continuous_folds == True:
+            raise NotImplementedError()
+        else:
+
+            # indices of outer test/train split for each fold
+                # It is imperative that the random state be identical to the random state of the Kfold used
+                # in ensemble_cv
+            cv_kf = KFold(n_splits=n_cv_outer, shuffle=True, random_state=42)
+            skf  = cv_kf.split(X)
+
+            i=1
+            Y_hat=np.zeros((len(Y),n_cv_outer))
+            pR2_cv = list()
+            # In outer loop, we rotate the test set through the full dataset
+            for idx_r, idx_t in skf:
+                if verbose > 1:
+                    print( '...runnning outer cv-fold', i, 'of', n_cv_outer)
+
+                Xr_o = X[idx_r, :] # train set input
+                Yr_o = Y[idx_r] # train set output
+                Xt_o = X[idx_t, :] # test set input
+                Yt_o = Y[idx_t] # test set output (used for scoring ensemble only)
+
+
+                cv_kf_in = KFold(n_splits=n_cv_inner, shuffle=True, random_state=42)
+                skf_inner  = cv_kf_in.split(Xr_o)
+
+                j=1
+                # In the inner loop, we perform CV to predict the full validation set Yr_o, which will be recorded
+                # to be used for ensemble training. THEN we use the full Xr_o to predict values for Xt_o, which will
+                # be used for ensemble evaluation.
+                for idx_r_inner, idx_t_inner in skf_inner:
+
+                    j+=1
+                    Xr = Xr_o[idx_r_inner, :]
+                    Yr = Yr_o[idx_r_inner]
+                    Xt = Xr_o[idx_t_inner, :]
+                    Yt = Yr_o[idx_t_inner]
+                    # Predict a fold of the Yr_o (validation)
+                    self.fit(Xr, Yr, get_history_terms = False)
+                    Yt_hat = self.predict(Xt, get_history_terms = False)
+
+                    full_indices = idx_r[idx_t_inner] # indices of inner loop
+                    Y_hat[full_indices,i-1] = Yt_hat
+
+                    Yt_hat.reshape(Yt.shape)
+                    pR2 = self.poisson_pseudoR2(Yt, Yt_hat, np.mean(Yr))
+                    pR2_cv.append(pR2)
+
+                    if verbose > 1:
+                        print( 'pR2: ', pR2)
+
+                # Now predict the ensemble's test set
+                self.fit(Xr_o, Yr_o, get_history_terms = False)
+                Yt_hat = self.predict(Xt_o, get_history_terms = False)
+
+                Y_hat[idx_t,i-1] = Yt_hat
+                pR2 = self.poisson_pseudoR2(Yt_o, Yt_hat, np.mean(Yr_o))
+                pR2_cv.append(pR2)
+
+                i+=1
+
+        if verbose > 0:
+            print("pR2_cv: %0.6f (+/- %0.6f)" % (np.mean(pR2_cv),
+                                                 np.std(pR2_cv)/np.sqrt(n_cv_inner*n_cv_outer)))
+
+        return Y_hat, pR2_cv
+
+
+    def ensemble_cv(self, X, Y, n_cv_outer=5,n_cv_inner=5,
+                    continuous_folds = False, verbose=1, return_first_order_results = False):
+        """Outputs the scores and prediction according to a nested cross-validation scheme.
+
+
+
+        Input
+        =====
+        X  = input data
+        Y = spiking data
+        n_cv = number of cross-validations folds
+        continuous_folds = True/False. whether to split folds randomly or to
+                        split them in contiguous chunks. The latter is advantageous
+                        when using spike history as a covariate to prevent
+                        leakage across folds
+        return_first_order_results = True/False. Whether to return the results of the first
+                                        order methods.
+
+        Returns
+        =======
+        (Y_hat, pR2_cv); a vector of predictions Y_hat with the
+        same dimensions as Y, and a list of pR2 scores on each fold pR2_cv.
+
+        first_order_results: a dictionary of the results of the first-order methods' fits,
+        in same format as (Y_hat, pR2_cv).
+
+
+        """
+
+            # get history terms
+        if self.tunemodel == 'lstm':
+            X, Y = self.get_all_with_history_keras(X, Y)
+        else:
+            X, Y = self.get_all_with_history(X, Y)
+
+        first_order_results = dict()
+
+        # first we train all the 1st order methods with the nested_cv scheme
+        X_list = list()
+        for mod in self.first_order_models:
+            if verbose >0:
+                print('Running first level model '+str(mod.tunemodel))
+            Yt_hat, PR2 = mod.fit_nested_cv(X, Y, continuous_folds = continuous_folds,
+                                            n_cv_outer=n_cv_outer, n_cv_inner=n_cv_inner,
+                                        verbose = verbose)
+            # Put the previous results in a new data matrix
+            X_list.append(Yt_hat)
+
+            # save the model fits as attributes
+            first_order_results[str(mod.tunemodel)] = dict()
+            first_order_results[str(mod.tunemodel)]['Yt_hat'] = Yt_hat
+            first_order_results[str(mod.tunemodel)]['PR2'] = PR2
+
+        for x in X_list:
+            assert x.shape == (np.size(Y),n_cv_outer)
+
+        if verbose >0:
+                print('Running ensemble...')
+
+        if continuous_folds == False:
+            # indices of outer test/train split for each fold
+            cv_kf = KFold(n_splits=n_cv_outer, shuffle=True, random_state=42)
+            skf  = cv_kf.split(X_list[0])
+
+            i=0
+            Y_hat=np.zeros(len(Y))
+            pR2_cv = list()
+            for idx_r, idx_t in skf:
+
+                # Get the first fold from each list
+                X = np.array([x[:,i] for x in X_list])
+                X = X.transpose()
+
+                Xr = X[idx_r, :]
+                Yr = Y[idx_r]
+                Xt = X[idx_t, :]
+                Yt = Y[idx_t]
+
+                i+=1
+                if verbose > 1:
+                    print( '...runnning cv-fold', i, 'of', n_cv_outer)
+
+                self.fit(Xr, Yr, get_history_terms = False)
+                Yt_hat = self.predict(Xt, get_history_terms = False)
+                Y_hat[idx_t] = Yt_hat
+
+                pR2 = self.poisson_pseudoR2(Yt, Yt_hat, np.mean(Yr))
+                pR2_cv.append(pR2)
+
+                if verbose > 1:
+                    print( 'pR2: ', pR2)
+        else:
+            raise NotImplementedError()
+
+
+
+        if verbose > 0:
+            print("pR2_cv: %0.6f (+/- %0.6f)" % (np.mean(pR2_cv),
+                                                 np.std(pR2_cv)/np.sqrt(n_cv_outer)))
+
+        if return_first_order_results:
+            return Y_hat, pR2_cv, first_order_results
+        else:
+            return Y_hat, pR2_cv
+
 
     def poisson_pseudoR2(self, y, yhat, ynull):
         # This is our scoring function. Implements pseudo-R2
