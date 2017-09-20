@@ -333,7 +333,7 @@ class MLencoding(object):
 
         Y = self.model.predict(X)
 
-        return Y
+        return Y.flatten()
 
 
 
